@@ -67,12 +67,16 @@ class Function():
             op_name = class_name(node.op)
             if op_name == "Add":
                 opcode_change += opcodes.STACK_ADD
+            elif op_name == "Sub":
+                opcode_change += opcodes.STACK_SUBTRACT
             elif op_name == "Mult":
                 opcode_change += opcodes.STACK_MULTIPLY
+            elif op_name == "Div":
+                opcode_change += opcodes.STACK_DIVIDE
             else:
                 self.logger.warning("Missing handler for op {}".format(op_name))
         else:
-            self.logger.warning("Missing handler for node type {}".format(node_name))
+            self.logger.warning("Missing handler for node value type {}".format(node_name))
         
         return opcode_change
 
@@ -162,6 +166,8 @@ def main():
 def bar(a, b):
     c = a + b
     d = c * 2
+    k = a/b
+    z = a-c
     return d
 
 k = 1
