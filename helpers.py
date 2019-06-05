@@ -1,3 +1,4 @@
+import logging
 from math import sqrt
 from functools import reduce
 
@@ -67,3 +68,16 @@ def factorise(n):    # (cf. https://stackoverflow.com/a/15703327/849891)
         else:
             if n > 1:
                 yield int(n); break
+
+def class_name(instance):
+    return type(instance).__name__
+
+def init_logger(name):
+    logger = logging.getLogger(name)
+    logger.setLevel(logging.DEBUG)
+
+    ch = logging.StreamHandler()
+    ch.setFormatter(logging.Formatter("[%(name)s] %(levelname)s - %(message)s"))
+    logger.addHandler(ch)
+
+    return logger

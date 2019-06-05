@@ -1,5 +1,6 @@
 import array
 import logging
+import helpers
 
 class Heap:
     # this class represents the heap
@@ -15,12 +16,7 @@ class Heap:
         self.allocated_func_len = 0
         self.allocated_func_space = []
         
-        self.logger = logging.getLogger("Heap")
-        self.logger.setLevel(logging.DEBUG)
-
-        ch = logging.StreamHandler()
-        ch.setFormatter(logging.Formatter("[%(name)s] %(levelname)s - %(message)s"))
-        self.logger.addHandler(ch)
+        self.logger = helpers.init_logger("HEAP")
 
     def write(self, addr, data):
         self.heap[addr] = data
