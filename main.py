@@ -48,6 +48,33 @@ class Function():
             return helpers.num(offset) + opcodes.HEAP_READ
         else:
             raise Exception("Cannot locate variable {}".format(name))
+    
+    def handle_value(self, node):
+        # handles node.value
+
+        opcode_change = ""
+
+        node_name = class_name(node)
+        if node_name == "Name":
+            opcode_change += self.read_var(node.id)
+        elif node_name == "Num":
+            opcode_change += helpers.num(node.n)
+        elif node_name == "BinOp":
+            # load left value onto stack first, then right
+            opcode_change += self.handle_value(node.left)
+            opcode_change += self.handle_value(node.right)
+            
+            op_name = class_name(node.op)
+            if op_name == "Add":
+                opcode_change += opcodes.STACK_ADD
+            elif op_name == "Mult":
+                opcode_change += opcodes.STACK_MULTIPLY
+            else:
+                self.logger.warning("Missing handler for op {}".format(op_name))
+        else:
+            self.logger.warning("Missing handler for node type {}".format(node_name))
+        
+        return opcode_change
 
     def build_from(self, node):
         # builds a function from a ast node
@@ -92,35 +119,13 @@ class Function():
                     raise Exception("Cannot assign to more than one variable at a time")
                 
                 # evaluate node.value and leave it on the stack
-                value = node.value
-                value_name = class_name(value)
-                if value_name == "BinOp":
-                    # load left value onto stack first
-                    opcode_change += self.read_var(value.left.id)
-
-                    # load right value onto stack
-                    # RHS can be a variable or num
-                    value_right_name = class_name(value.right)
-                    if value_right_name == "Name":
-                        opcode_change += self.read_var(value.right.id)
-                    elif value_right_name == "Num":
-                        opcode_change += helpers.num(value.right.n)
-                    else:
-                        self.logger.warning("Missing handler for BinOp.right {}".format(value_right_name))
-                    
-                    op_name = class_name(value.op)
-                    if op_name == "Add":
-                        opcode_change += opcodes.STACK_ADD
-                    elif op_name == "Mult":
-                        opcode_change += opcodes.STACK_MULTIPLY
-                    else:
-                        self.logger.warning("Missing handler for op {}".format(op_name))
-                else:
-                    self.logger.warning("Missing handler for value {}".format(value_name))
+                opcode_change += self.handle_value(node.value)
                 
                 # load the value into the local variable
                 opcode_change += helpers.num(self.variables[node.targets[0].id])
                 opcode_change += opcodes.HEAP_WRITE
+            elif node_name == "Return":
+                opcode_change += self.handle_value(node.value)
             else:
                 self.logger.warning("Missing handler for node {}".format(node_name))
             
