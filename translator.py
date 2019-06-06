@@ -1,8 +1,14 @@
 import ast
 import logging
-import opcodes
+import collections
+import opcodes as OPCODES
 import helpers
 from heap import Heap
+
+# starts at 10 so that a JMP can be inserted
+# before the functions to skip past it to
+# main program execution
+FUNCTION_OFFSET_START = 10
 
 class VariableCounter(ast.NodeVisitor):
     # this class serves to count the number of variables
@@ -31,11 +37,14 @@ class Translator():
         # function table containing offsets at which 
         # functions can be found at, starting at 0
         # key: name of function
-        # val: offset of function
-        self.functions = {}
+        # val: {
+        #   opcodes,
+        #   offset
+        # }
+        self.functions = collections.OrderedDict()
         # tracks total length of functions
         # to calculate future offsets
-        self.funcs_len = 0
+        self.funcs_len = FUNCTION_OFFSET_START
 
         self.logger = helpers.init_logger("TRANSLATOR")
 
@@ -43,34 +52,48 @@ class Translator():
         # translates code to lscvm
 
         tree = ast.parse(code)
+        self.logger.info("Looking for functions...")
         for node in ast.iter_child_nodes(tree):
-            self.logger.debug(ast.dump(node))
-
             node_name = helpers.class_name(node)
             if node_name == "FunctionDef":
-                func = self.translate_function(node)
+                self.translate_function(node)
+        
+        self.logger.info("Concantenating functions...")
+        total_func_length = sum([len(func["opcodes"]) for func in self.functions.values()])
+        self.logger.info("Total function length: {}".format(total_func_length))
 
-                self.opcodes += func["opcodes"]
-                self.functions[func["name"]] = self.funcs_len
-                self.funcs_len += len(func["opcodes"])
-            else:
-                self.translate_node(node)
-    
+        jump_functions = helpers.num(total_func_length).ljust(FUNCTION_OFFSET_START - 1, " ") + OPCODES.GO
+        if len(jump_functions) > FUNCTION_OFFSET_START:
+            raise Exception("JMP instruction too long. Increase FUNCTION_OFFSET_START")
+
+        self.opcodes += jump_functions
+
+        for func_name in self.functions:
+            func = self.functions[func_name]
+            self.opcodes += func["opcodes"]
+
+        for node in ast.iter_child_nodes(tree):
+            node_name = helpers.class_name(node)
+            if node_name != "FunctionDef":
+                self.opcodes += self.translate_node(node)
+
+        return self.opcodes
+
     def read_var(self, name):
         # return opcodes for retrieving value of variable "name"
         # tries to look in order: local variables, args, globals
         if name in self.locals.keys():
             offset = self.locals[name]
-            return helpers.num(offset) + opcodes.HEAP_READ
+            return helpers.num(offset) + OPCODES.HEAP_READ
         elif name in self.args:
             # name is in args, retrieve from back of stack
             # offset from end of stack
             offset = len(self.args) - self.args.index(name)
-            return helpers.num(offset) + opcodes.STACK_FIND
+            return helpers.num(offset) + OPCODES.STACK_FIND
         elif name in self.globals.keys():
             # name is in local variable list, retrieve from heap
             offset = self.globals[name]
-            return helpers.num(offset) + opcodes.HEAP_READ
+            return helpers.num(offset) + OPCODES.HEAP_READ
         else:
             raise Exception("Cannot read from unknown variable {}".format(name))
 
@@ -80,10 +103,10 @@ class Translator():
         # args are not writable because they're passed on the stack
         if name in self.locals.keys():
             offset = self.locals[name]
-            return helpers.num(offset) + opcodes.HEAP_WRITE
+            return helpers.num(offset) + OPCODES.HEAP_WRITE
         elif name in self.globals.keys():
             offset = self.globals[name]
-            return helpers.num(offset) + opcodes.HEAP_WRITE
+            return helpers.num(offset) + OPCODES.HEAP_WRITE
         else:
             raise Exception("Cannot write to unknown variable {}".format(name))
 
@@ -104,13 +127,13 @@ class Translator():
             
             op_name = helpers.class_name(node.op)
             if op_name == "Add":
-                opcode_change += opcodes.STACK_ADD
+                opcode_change += OPCODES.STACK_ADD
             elif op_name == "Sub":
-                opcode_change += opcodes.STACK_SUBTRACT
+                opcode_change += OPCODES.STACK_SUBTRACT
             elif op_name == "Mult":
-                opcode_change += opcodes.STACK_MULTIPLY
+                opcode_change += OPCODES.STACK_MULTIPLY
             elif op_name == "Div":
-                opcode_change += opcodes.STACK_DIVIDE
+                opcode_change += OPCODES.STACK_DIVIDE
             else:
                 self.logger.warning("Missing handler for BinOp.op {}".format(op_name))
         elif node_name == "Assign":
@@ -122,7 +145,18 @@ class Translator():
             # evaluate node.value and leave it on the stack
             opcode_change += self.translate_node(node.value)
 
-            self.write_var(node.targets[0].id)
+            opcode_change += self.write_var(node.targets[0].id)
+        elif node_name == "Call":
+            if node.func.id not in self.functions:
+                raise Exception("Tried to call undefined function {}".format(node.func.id))
+
+            for arg in node.args:
+                opcode_change += self.translate_node(arg)
+            
+            opcode_change += helpers.num(self.functions[node.func.id]["offset"])
+            opcode_change += OPCODES.CALL
+        elif node_name == "Expr":
+            opcode_change += self.translate_node(node.value)
         elif node_name == "Return":
             opcode_change += self.translate_node(node.value)
         else:
@@ -137,6 +171,9 @@ class Translator():
         opcodes = ""
 
         func_name = node.name
+        self.functions[func_name] = {
+            "offset": self.funcs_len
+        }
 
         # load name of args
         for arg in node.args.args:
@@ -163,6 +200,8 @@ class Translator():
         for node in node.body:
             opcodes += self.translate_node(node)
 
+        opcodes += OPCODES.RETURN
+
         # remember to destroy variables on the stack if any extra are left
 
         self.args.clear()
@@ -170,7 +209,5 @@ class Translator():
 
         self.heap.release_func()
 
-        return {
-            "name": func_name,
-            "opcodes": opcodes
-        }
+        self.functions[func_name]["opcodes"] = opcodes
+        self.funcs_len += len(opcodes)
