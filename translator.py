@@ -26,11 +26,17 @@ class Translator():
         # key: name of global/local variable
         # val: heap offset
         self.globals = {}
+        # cleared when done parsing a function
         self.locals = {}
 
         # list of args passed to function
         # this will be cleared when done parsing a function
         self.args = []
+
+        # used to track where are args in a function
+        # because args are on the stack
+        # reset to 0 at the start of a function parse
+        self.stack_offset = 0
 
         self.opcodes = ""
 
@@ -87,8 +93,8 @@ class Translator():
             return helpers.num(offset) + OPCODES.HEAP_READ
         elif name in self.args:
             # name is in args, retrieve from back of stack
-            # offset from end of stack
-            offset = len(self.args) - self.args.index(name)
+            # offset from end of stack AND stack_offset
+            offset = len(self.args) - self.args.index(name) + self.stack_offset
             return helpers.num(offset) + OPCODES.STACK_FIND
         elif name in self.globals.keys():
             # name is in local variable list, retrieve from heap
@@ -165,6 +171,8 @@ class Translator():
             return ""
         
         self.logger.debug("{}: {}".format(ast.dump(node), opcode_change))
+        
+        self.stack_offset += sum([OPCODES.stack_effect[op] for op in opcode_change])
         return opcode_change
 
     def translate_function(self, node):
@@ -197,6 +205,11 @@ class Translator():
 
         self.logger.info("Variables used: {}".format(["{} at heap[{}]".format(k, v) for k, v in self.locals.items()]))
 
+        # reset stack_offset counter to 0 and start tracking
+        # important when args are accessed in the function
+        # since they're on the stack and the function might
+        # leave stuff on the stack
+        self.stack_offset = 0
         # handle the actual code in the function
         for node in node.body:
             opcodes += self.translate_node(node)
