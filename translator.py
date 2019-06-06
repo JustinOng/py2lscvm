@@ -153,7 +153,8 @@ class Translator():
             for arg in node.args:
                 opcode_change += self.translate_node(arg)
             
-            opcode_change += helpers.num(self.functions[node.func.id]["offset"])
+            # - 1 from the offset because ip is incremented after the jump instruction
+            opcode_change += helpers.num(self.functions[node.func.id]["offset"] - 1)
             opcode_change += OPCODES.CALL
         elif node_name == "Expr":
             opcode_change += self.translate_node(node.value)
