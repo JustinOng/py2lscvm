@@ -5,10 +5,20 @@ import opcodes as OPCODES
 import helpers
 from heap import Heap
 
+# the constants declared here are to make some assumptions
+# about the structure and layout of the program
+# these can be adjusted if they are exceeded
+
 # starts at 10 so that a JMP can be inserted
 # before the functions to skip past it to
 # main program execution
 FUNCTION_OFFSET_START = 10
+# allocate MAX_FUNCTION_VARIABLES spaces at VARIABLE_OFFSET
+# to hold arguments and local variables of a function
+MAX_FUNCTION_VARIABLES = 10
+# offset on the heap at which to store
+# args and local variables
+VARIABLE_OFFSET = 0
 
 class VariableCounter(ast.NodeVisitor):
     # this class serves to count the number of variables
@@ -23,14 +33,13 @@ class Translator():
     def __init__(self):
         self.heap = Heap()
 
-        # key: name of global/local variable
+        # for self.globals, self.locals:
+        # key: name of variable
         # val: heap offset
         self.globals = {}
-        self.locals = {}
-
-        # list of args passed to function
+        # list of args/local variables of a function
         # this will be cleared when done parsing a function
-        self.args = []
+        self.locals = {}
 
         self.opcodes = ""
 
@@ -85,11 +94,6 @@ class Translator():
         if name in self.locals.keys():
             offset = self.locals[name]
             return helpers.num(offset) + OPCODES.HEAP_READ
-        elif name in self.args:
-            # name is in args, retrieve from back of stack
-            # offset from end of stack
-            offset = len(self.args) - self.args.index(name)
-            return helpers.num(offset) + OPCODES.STACK_FIND
         elif name in self.globals.keys():
             # name is in local variable list, retrieve from heap
             offset = self.globals[name]
@@ -171,16 +175,28 @@ class Translator():
         # builds a function from a ast node
         opcodes = ""
 
+        # tracks number of variables in the function
+        # this includes both arguments and local variables
+        variable_offset = VARIABLE_OFFSET
+
         func_name = node.name
         self.functions[func_name] = {
             "offset": self.funcs_len
         }
 
         # load name of args
+        args = []
         for arg in node.args.args:
-            self.args.append(arg.arg)
+            self.locals[arg.arg] = variable_offset
+            args.append(arg.arg)
+            variable_offset += 1
+        
+        # transfer value of args from the stack to the heap
+        for arg in args[::-1]:
+            opcodes += helpers.num(self.locals[arg])
+            opcodes += OPCODES.HEAP_WRITE
 
-        self.logger.info("Building function {} with args {}".format(func_name, ",".join(self.args)))
+        self.logger.info("Building function {} with args {}".format(func_name, ", ".join(args)))
         self.logger.debug(ast.dump(node))
         
         # scan through to identify all the variables
@@ -188,12 +204,14 @@ class Translator():
         counter = VariableCounter()
         counter.visit(node)
 
-        # allocate space on the heap for each of the local vars
-        var_offset = self.heap.allocate_func(len(counter.variables))
-
         # store the heap address for local vars
-        for i, var in enumerate(counter.variables):
-            self.locals[var] = var_offset + i
+        for local_var in counter.variables:
+            # check if the variable is actually an argument
+            if local_var in args:
+                continue
+            
+            self.locals[local_var] = variable_offset
+            variable_offset += 1
 
         self.logger.info("Variables used: {}".format(["{} at heap[{}]".format(k, v) for k, v in self.locals.items()]))
 
@@ -205,10 +223,7 @@ class Translator():
 
         # remember to destroy variables on the stack if any extra are left
 
-        self.args.clear()
         self.locals.clear()
-
-        self.heap.release_func()
 
         self.functions[func_name]["opcodes"] = opcodes
         self.funcs_len += len(opcodes)

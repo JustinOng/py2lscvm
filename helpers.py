@@ -74,7 +74,7 @@ def class_name(instance):
 
 def init_logger(name):
     logger = logging.getLogger(name)
-    logger.setLevel(logging.DEBUG)
+    logger.setLevel(logging.INFO)
 
     ch = logging.StreamHandler()
     ch.setFormatter(logging.Formatter("[%(name)s] %(levelname)s - %(message)s"))
