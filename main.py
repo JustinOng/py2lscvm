@@ -5,13 +5,8 @@ from translator import Translator
 
 def main():
     translator = Translator()
-    lscvm = translator.translate("""
-def bar(a, b):
-    c = a + b
-    d = c * 2
-    return d
-
-bar(5, 10)""")
+    with open("source.py") as f:
+        lscvm = translator.translate(f.read())
     print(lscvm)
 
 if __name__ == "__main__":
