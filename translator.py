@@ -180,6 +180,13 @@ class Translator():
 
         self.locals[name] = heap_offset
 
+    def translate_nodes(self, nodes):
+        opcodes = ""
+        for node in nodes:
+            opcodes += self.translate_node(node)
+
+        return opcodes
+
     def translate_node(self, node):
         # translates a python node into a series of lscvm instructions
 
@@ -237,6 +244,47 @@ class Translator():
                 raise TranslationUnknown("Missing handler for AugAssign.op {}".format(op_name))
             
             opcode_change += self.write_var(node.target.id)
+        elif node_name == "If":
+            test = self.translate_node(node.test)
+            body = self.translate_nodes(node.body)
+            orelse = self.translate_nodes(node.orelse)
+
+            body += helpers.num(len(orelse))
+            body += OPCODES.GO
+
+            opcode_change += test
+            opcode_change += helpers.num(len(body))
+            opcode_change += OPCODES.CONDITIONAL_JUMP
+            opcode_change += body
+            opcode_change += orelse
+        elif node_name == "Compare":
+            # compare will leave a 1 on the stack if true, else 0
+            opcode_change += self.translate_node(node.left)
+
+            if len(node.comparators) > 1:
+                self.logger.info(ast.dump(node))
+                raise TranslationUnknown("More than one comparator present")
+
+            opcode_change += self.translate_node(node.comparators[0])
+
+            if len(node.ops) > 1:
+                self.logger.info(ast.dump(node))
+                raise TranslationUnknown("More than one operator provided")
+            
+            op_name = helpers.class_name(node.ops[0])
+
+            if op_name == "Eq":
+                opcode_change += OPCODES.STACK_COMPARE
+                # this changes 0 to 1, and non zero to 0
+                opcode_change += OPCODES.STACK_3
+                opcode_change += OPCODES.CONDITIONAL_JUMP
+                opcode_change += OPCODES.STACK_0
+                opcode_change += OPCODES.STACK_1
+                opcode_change += OPCODES.GO
+                opcode_change += OPCODES.STACK_1
+            else:
+                self.logger.info(ast.dump(node))
+                raise TranslationUnknown("Missing handler for operator {}".format(op_name))
         elif node_name == "Call":
             if node.func.id not in self.functions:
                 raise TranslationError("Tried to call undefined function {}".format(node.func.id))
@@ -297,8 +345,7 @@ class Translator():
         self.logger.info("Variables used: {}".format(["{} at heap[{}]".format(k, v) for k, v in self.locals.items()]))
 
         # handle the actual code in the function
-        for node in node.body:
-            opcodes += self.translate_node(node)
+        opcodes += self.translate_nodes(node.body)
 
         opcodes += OPCODES.RETURN
 
