@@ -150,6 +150,24 @@ class Translator():
             opcode_change += self.translate_node(node.value)
 
             opcode_change += self.write_var(node.targets[0].id)
+        elif node_name == "AugAssign":
+            # a += b
+            opcode_change += self.read_var(node.target.id)
+            opcode_change += self.translate_node(node.value)
+            
+            op_name = helpers.class_name(node.op)
+            if op_name == "Add":
+                opcode_change += OPCODES.STACK_ADD
+            elif op_name == "Sub":
+                opcode_change += OPCODES.STACK_SUBTRACT
+            elif op_name == "Mult":
+                opcode_change += OPCODES.STACK_MULTIPLY
+            elif op_name == "Div":
+                opcode_change += OPCODES.STACK_DIVIDE
+            else:
+                self.logger.warning("Missing handler for AugAssign.op {}".format(op_name))
+            
+            opcode_change += self.write_var(node.target.id)
         elif node_name == "Call":
             if node.func.id not in self.functions:
                 raise Exception("Tried to call undefined function {}".format(node.func.id))
@@ -165,7 +183,7 @@ class Translator():
         elif node_name == "Return":
             opcode_change += self.translate_node(node.value)
         else:
-            self.logger.warning("Missing handler for node type {}".format(node_name))
+            self.logger.warning("Missing handler for node type {}: {}".format(node_name, ast.dump(node)))
             return ""
         
         self.logger.debug("{}: {}".format(ast.dump(node), opcode_change))
