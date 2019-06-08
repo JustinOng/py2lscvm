@@ -20,8 +20,19 @@ MAX_VARIABLES = 32
 VARIABLE_OFFSET = 0
 
 class TranslationError(Exception):
-    def __init__(self, message):
-        super().__init__(message)
+    pass
+
+# this error is thrown when some limit is exceeded
+# and should be fixable by correcting some assumptions
+# (the constants defined above)
+class TranslationFail(TranslationError):
+    pass
+
+# this error is thrown when the compiler does not know
+# how to translate the ast. should be fixable by actually
+# implementing the translation code for the case
+class TranslationUnknown(TranslationError):
+    pass
 
 class VariableCounter(ast.NodeVisitor):
     # this class serves to count the number of variables
@@ -94,8 +105,8 @@ class Translator():
                 if node_name == "FunctionDef":
                     self.translate_function(node)
             except TranslationError as e:
-                self.logger.error("Failed to translate function at line {}: {}".format(node.lineno, e))
-                return
+                self.logger.error("Failed to translate function ({}) at line {}: {}".format(helpers.class_name(e), node.lineno, e))
+                raise e
         
         if len(self.functions):
             self.logger.info("Concantenating functions...")
@@ -104,7 +115,7 @@ class Translator():
 
             jump_functions = helpers.num(total_func_length).ljust(FUNCTION_OFFSET_START - 1, " ") + OPCODES.GO
             if len(jump_functions) > FUNCTION_OFFSET_START:
-                raise TranslationError("JMP instruction too long. Increase FUNCTION_OFFSET_START")
+                raise TranslationFail("JMP instruction too long. Increase FUNCTION_OFFSET_START")
 
             self.opcodes += jump_functions
         else:
@@ -121,7 +132,7 @@ class Translator():
                     self.opcodes += self.translate_node(node)
             except TranslationError as e:
                 self.logger.error("Failed to translate at line {}: {}".format(node.lineno, e))
-                return
+                raise e
 
         return self.opcodes
 
@@ -155,7 +166,7 @@ class Translator():
         # globals are stored starting at VARIABLE_OFFSET
         heap_offset = VARIABLE_OFFSET + len(self.globals)
         if heap_offset >= (VARIABLE_OFFSET + MAX_VARIABLES):
-            raise TranslationError("Failed to allocate global variable {}. Try increasing MAX_VARIABLES?".format(name))
+            raise TranslationFail("Failed to allocate global variable {}. Try increasing MAX_VARIABLES?".format(name))
 
         self.globals[name] = heap_offset
 
@@ -165,7 +176,7 @@ class Translator():
 
         heap_offset = VARIABLE_OFFSET + len(self.globals) + len(self.locals)
         if heap_offset >= (VARIABLE_OFFSET + MAX_VARIABLES):
-            raise TranslationError("Failed to allocate local variable {}. Try increasing MAX_VARIABLES?".format(name))
+            raise TranslationFail("Failed to allocate local variable {}. Try increasing MAX_VARIABLES?".format(name))
 
         self.locals[name] = heap_offset
 
@@ -194,12 +205,14 @@ class Translator():
             elif op_name == "Div":
                 opcode_change += OPCODES.STACK_DIVIDE
             else:
-                self.logger.warning("Missing handler for BinOp.op {}".format(op_name))
+                self.logger.info(ast.dump(node))
+                raise TranslationUnknown("Missing handler for BinOp.op {}".format(op_name))
         elif node_name == "Assign":
             # sanity check: cannot assign to more than one variable at a time
             # should be simple to do though
             if len(node.targets) > 1:
-                raise TranslationError("Cannot assign to more than one variable at a time")
+                self.logger.info(ast.dump(node))
+                raise TranslationUnknown("Cannot assign to more than one variable at a time")
             
             # evaluate node.value and leave it on the stack
             opcode_change += self.translate_node(node.value)
@@ -220,7 +233,8 @@ class Translator():
             elif op_name == "Div":
                 opcode_change += OPCODES.STACK_DIVIDE
             else:
-                self.logger.warning("Missing handler for AugAssign.op {}".format(op_name))
+                self.logger.info(ast.dump(node))
+                raise TranslationUnknown("Missing handler for AugAssign.op {}".format(op_name))
             
             opcode_change += self.write_var(node.target.id)
         elif node_name == "Call":
@@ -238,8 +252,7 @@ class Translator():
         elif node_name == "Return":
             opcode_change += self.translate_node(node.value)
         else:
-            self.logger.warning("Missing handler for node type {}: {}".format(node_name, ast.dump(node)))
-            return ""
+            raise TranslationUnknown("Missing handler for node type {}: {}".format(node_name, ast.dump(node)))
         
         self.logger.debug("{}: {}".format(ast.dump(node), opcode_change))
         return opcode_change
@@ -247,10 +260,6 @@ class Translator():
     def translate_function(self, node):
         # builds a function from a ast node
         opcodes = ""
-
-        # tracks number of variables in the function
-        # this includes both arguments and local variables
-        variable_offset = VARIABLE_OFFSET + len(self.globals)
 
         func_name = node.name
         self.functions[func_name] = {
