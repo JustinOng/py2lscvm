@@ -13,11 +13,10 @@ from heap import Heap
 # before the functions to skip past it to
 # main program execution
 FUNCTION_OFFSET_START = 10
-# allocate MAX_FUNCTION_VARIABLES spaces at VARIABLE_OFFSET
-# to hold arguments and local variables of a function
-MAX_FUNCTION_VARIABLES = 10
-# offset on the heap at which to store
-# args and local variables
+# allocate MAX_VARIABLES spaces at VARIABLE_OFFSET
+# to hold globals, and args and local variables of a function
+MAX_VARIABLES = 32
+# offset on the heap at which to store variables
 VARIABLE_OFFSET = 0
 
 class TranslationError(Exception):
@@ -27,11 +26,24 @@ class TranslationError(Exception):
 class VariableCounter(ast.NodeVisitor):
     # this class serves to count the number of variables
     # used in childs of the node passed to it
-    def __init__(self):
+    def __init__(self, tree):
         self.variables = set()
+        self.node_name = helpers.class_name(tree)
+
+        self.visit(tree)
+    
+    def visit_FunctionDef(self, node):
+        # pass so that it does not check inside function definitions
+        # but will look into the function if visit is
+        # explicitly called on a function
+        if self.node_name == "FunctionDef":
+            super().generic_visit(node)
 
     def visit_Assign(self, node):
         self.variables.update([a.id for a in node.targets])
+    
+    def visit_AugAssign(self, node):
+        self.variables.add(node.target.id)
 
 class Translator():
     def __init__(self):
@@ -65,6 +77,16 @@ class Translator():
         # translates code to lscvm
 
         tree = ast.parse(code)
+
+        self.logger.info("Identifying globals...")
+        counter = VariableCounter(tree)
+
+        for global_var in counter.variables:
+            self.alloc_global(global_var)
+            self.logger.info("Global {} at heap[{}]".format(global_var, self.globals[global_var]))
+
+        self.logger.info("Allocated {} global variables".format(len(self.globals)))
+
         self.logger.info("Looking for functions...")
         for node in ast.iter_child_nodes(tree):
             try:
@@ -75,15 +97,18 @@ class Translator():
                 self.logger.error("Failed to translate function at line {}: {}".format(node.lineno, e))
                 return
         
-        self.logger.info("Concantenating functions...")
-        total_func_length = sum([len(func["opcodes"]) for func in self.functions.values()])
-        self.logger.info("Total function length: {}".format(total_func_length))
+        if len(self.functions):
+            self.logger.info("Concantenating functions...")
+            total_func_length = sum([len(func["opcodes"]) for func in self.functions.values()])
+            self.logger.info("Total function length: {}".format(total_func_length))
 
-        jump_functions = helpers.num(total_func_length).ljust(FUNCTION_OFFSET_START - 1, " ") + OPCODES.GO
-        if len(jump_functions) > FUNCTION_OFFSET_START:
-            raise Exception("JMP instruction too long. Increase FUNCTION_OFFSET_START")
+            jump_functions = helpers.num(total_func_length).ljust(FUNCTION_OFFSET_START - 1, " ") + OPCODES.GO
+            if len(jump_functions) > FUNCTION_OFFSET_START:
+                raise TranslationError("JMP instruction too long. Increase FUNCTION_OFFSET_START")
 
-        self.opcodes += jump_functions
+            self.opcodes += jump_functions
+        else:
+            self.logger.info("No user defined functions, skipping function block")
 
         for func_name in self.functions:
             func = self.functions[func_name]
@@ -125,6 +150,24 @@ class Translator():
             return helpers.num(offset) + OPCODES.HEAP_WRITE
         else:
             raise TranslationError("Cannot write to unknown variable {}".format(name))
+    
+    def alloc_global(self, name):
+        # globals are stored starting at VARIABLE_OFFSET
+        heap_offset = VARIABLE_OFFSET + len(self.globals)
+        if heap_offset >= (VARIABLE_OFFSET + MAX_VARIABLES):
+            raise TranslationError("Failed to allocate global variable {}. Try increasing MAX_VARIABLES?".format(name))
+
+        self.globals[name] = heap_offset
+
+    def alloc_local(self, name):
+        # args and locals are stored starting at
+        # VARIABLE_OFFSET + len(self.globals)
+
+        heap_offset = VARIABLE_OFFSET + len(self.globals) + len(self.locals)
+        if heap_offset >= (VARIABLE_OFFSET + MAX_VARIABLES):
+            raise TranslationError("Failed to allocate local variable {}. Try increasing MAX_VARIABLES?".format(name))
+
+        self.locals[name] = heap_offset
 
     def translate_node(self, node):
         # translates a python node into a series of lscvm instructions
@@ -207,7 +250,7 @@ class Translator():
 
         # tracks number of variables in the function
         # this includes both arguments and local variables
-        variable_offset = VARIABLE_OFFSET
+        variable_offset = VARIABLE_OFFSET + len(self.globals)
 
         func_name = node.name
         self.functions[func_name] = {
@@ -217,9 +260,9 @@ class Translator():
         # load name of args
         args = []
         for arg in node.args.args:
-            self.locals[arg.arg] = variable_offset
             args.append(arg.arg)
-            variable_offset += 1
+            self.alloc_local(arg.arg)
+            self.logger.info("Arg {} at heap[{}]".format(arg.arg, self.locals[arg.arg]))
         
         # transfer value of args from the stack to the heap
         for arg in args[::-1]:
@@ -231,8 +274,7 @@ class Translator():
         
         # scan through to identify all the variables
         # that are assigned to
-        counter = VariableCounter()
-        counter.visit(node)
+        counter = VariableCounter(node)
 
         # store the heap address for local vars
         for local_var in counter.variables:
@@ -240,8 +282,8 @@ class Translator():
             if local_var in args:
                 continue
             
-            self.locals[local_var] = variable_offset
-            variable_offset += 1
+            self.alloc_local(local_var)
+            self.logger.info("Local {} at heap[{}]".format(local_var, self.locals[local_var]))
 
         self.logger.info("Variables used: {}".format(["{} at heap[{}]".format(k, v) for k, v in self.locals.items()]))
 
