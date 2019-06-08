@@ -20,6 +20,10 @@ MAX_FUNCTION_VARIABLES = 10
 # args and local variables
 VARIABLE_OFFSET = 0
 
+class TranslationError(Exception):
+    def __init__(self, message):
+        super().__init__(message)
+
 class VariableCounter(ast.NodeVisitor):
     # this class serves to count the number of variables
     # used in childs of the node passed to it
@@ -63,9 +67,13 @@ class Translator():
         tree = ast.parse(code)
         self.logger.info("Looking for functions...")
         for node in ast.iter_child_nodes(tree):
-            node_name = helpers.class_name(node)
-            if node_name == "FunctionDef":
-                self.translate_function(node)
+            try:
+                node_name = helpers.class_name(node)
+                if node_name == "FunctionDef":
+                    self.translate_function(node)
+            except TranslationError as e:
+                self.logger.error("Failed to translate function at line {}: {}".format(node.lineno, e))
+                return
         
         self.logger.info("Concantenating functions...")
         total_func_length = sum([len(func["opcodes"]) for func in self.functions.values()])
@@ -82,9 +90,13 @@ class Translator():
             self.opcodes += func["opcodes"]
 
         for node in ast.iter_child_nodes(tree):
-            node_name = helpers.class_name(node)
-            if node_name != "FunctionDef":
-                self.opcodes += self.translate_node(node)
+            try:
+                node_name = helpers.class_name(node)
+                if node_name != "FunctionDef":
+                    self.opcodes += self.translate_node(node)
+            except TranslationError as e:
+                self.logger.error("Failed to translate at line {}: {}".format(node.lineno, e))
+                return
 
         return self.opcodes
 
@@ -99,7 +111,7 @@ class Translator():
             offset = self.globals[name]
             return helpers.num(offset) + OPCODES.HEAP_READ
         else:
-            raise Exception("Cannot read from unknown variable {}".format(name))
+            raise TranslationError("Cannot read from unknown variable {}".format(name))
 
     def write_var(self, name):
         # writes to name (value to be written should already be on the stack)
@@ -112,7 +124,7 @@ class Translator():
             offset = self.globals[name]
             return helpers.num(offset) + OPCODES.HEAP_WRITE
         else:
-            raise Exception("Cannot write to unknown variable {}".format(name))
+            raise TranslationError("Cannot write to unknown variable {}".format(name))
 
     def translate_node(self, node):
         # translates a python node into a series of lscvm instructions
@@ -144,7 +156,7 @@ class Translator():
             # sanity check: cannot assign to more than one variable at a time
             # should be simple to do though
             if len(node.targets) > 1:
-                raise Exception("Cannot assign to more than one variable at a time")
+                raise TranslationError("Cannot assign to more than one variable at a time")
             
             # evaluate node.value and leave it on the stack
             opcode_change += self.translate_node(node.value)
@@ -170,7 +182,7 @@ class Translator():
             opcode_change += self.write_var(node.target.id)
         elif node_name == "Call":
             if node.func.id not in self.functions:
-                raise Exception("Tried to call undefined function {}".format(node.func.id))
+                raise TranslationError("Tried to call undefined function {}".format(node.func.id))
 
             for arg in node.args:
                 opcode_change += self.translate_node(arg)
