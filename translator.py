@@ -350,6 +350,30 @@ class Translator():
             # - 1 from the offset because ip is incremented after the jump instruction
             opcode_change += helpers.num(self.functions[node.func.id]["offset"] - 1)
             opcode_change += OPCODES.CALL
+        elif node_name == "While":
+            if node.orelse:
+                self.logger.info(ast.dump(node))
+                raise TranslationUnknown("Handling of While.orelse is not implemented")
+            # build something like:
+            # 1: [load -len(everything below)]
+            # 2: [copy previous value] (this is so that i can calculate len(everything below)
+            #                             without including the length of the actual pushing)
+            # 3: [compare]
+            # 4: [load len(everything below)]
+            # 5: JZ
+            # 6: [body]
+            # 7: JMP (this jumps using -len(everything below) loaded at the start)
+
+            # 5 to 7
+            body = OPCODES.CONDITIONAL_JUMP + self.translate_nodes(node.body) + OPCODES.GO
+            # 3 to 7
+            opcode_change = OPCODES.STACK_1 + OPCODES.STACK_FIND
+            opcode_change += self.translate_node(node.test) + helpers.num(len(body) - 1) + body
+            # 1 to 7
+            opcode_change = helpers.num(-len(opcode_change)) + opcode_change
+
+            # remove the two extra jump lengths left on the stack
+            opcode_change += OPCODES.STACK_DROP * 2
         elif node_name == "Expr":
             opcode_change += self.translate_node(node.value)
         elif node_name == "Return":
