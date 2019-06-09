@@ -102,6 +102,7 @@ class Translator():
         for node in ast.iter_child_nodes(tree):
             try:
                 node_name = helpers.class_name(node)
+
                 if node_name == "FunctionDef":
                     self.translate_function(node)
             except TranslationError as e:
@@ -128,6 +129,12 @@ class Translator():
         for node in ast.iter_child_nodes(tree):
             try:
                 node_name = helpers.class_name(node)
+
+                # silently skip "from stubs import *" because this is used
+                # for testing scripts before compiling
+                if node_name == "ImportFrom" and node.module == "stubs":
+                    continue
+
                 if node_name != "FunctionDef":
                     self.opcodes += self.translate_node(node)
             except TranslationError as e:
