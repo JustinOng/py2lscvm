@@ -5,6 +5,10 @@ from functools import reduce
 def num(i):
     opcodes = ""
 
+    if i < 0:
+        opcodes = "a" + num(-i) + "S"
+        return opcodes
+
     if i <= 9:
         return chr(0x61 + i)
     
