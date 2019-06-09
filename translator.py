@@ -102,6 +102,7 @@ class Translator():
         for node in ast.iter_child_nodes(tree):
             try:
                 node_name = helpers.class_name(node)
+
                 if node_name == "FunctionDef":
                     self.translate_function(node)
             except TranslationError as e:
@@ -128,6 +129,12 @@ class Translator():
         for node in ast.iter_child_nodes(tree):
             try:
                 node_name = helpers.class_name(node)
+
+                # silently skip "from stubs import *" because this is used
+                # for testing scripts before compiling
+                if node_name == "ImportFrom" and node.module == "stubs":
+                    continue
+
                 if node_name != "FunctionDef":
                     self.opcodes += self.translate_node(node)
             except TranslationError as e:
@@ -341,14 +348,26 @@ class Translator():
                 self.logger.info(ast.dump(node))
                 raise TranslationUnknown("Missing handler for operator {}".format(op_name))
         elif node_name == "Call":
-            if node.func.id not in self.functions:
-                raise TranslationError("Tried to call undefined function {}".format(node.func.id))
+            if helpers.class_name(node.func) != "Name":
+                raise TranslationUnknown("Calling functions this way is not supported")
+
+            func_name = node.func.id
+            if func_name not in ["putchar", "putint", "puts"] and func_name not in self.functions:
+                raise TranslationError("Tried to call undefined function {}".format(func_name))
 
             for arg in node.args:
                 opcode_change += self.translate_node(arg)
 
-            opcode_change += helpers.num(self.functions[func_name]["offset"])
-            opcode_change += OPCODES.CALL
+            if func_name in ["putchar", "putint", "puts"]:
+                if func_name == "putchar":
+                    opcode_change += OPCODES.PRINT_ASCII
+                elif func_name == "putint":
+                    opcode_change += OPCODES.PRINT_NUM
+                elif func_name == "puts":
+                    pass
+            else:
+                opcode_change += helpers.num(self.functions[func_name]["offset"])
+                opcode_change += OPCODES.CALL
         elif node_name == "While":
             if node.orelse:
                 self.logger.info(ast.dump(node))
