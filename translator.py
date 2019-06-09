@@ -346,9 +346,8 @@ class Translator():
 
             for arg in node.args:
                 opcode_change += self.translate_node(arg)
-            
-            # - 1 from the offset because ip is incremented after the jump instruction
-            opcode_change += helpers.num(self.functions[node.func.id]["offset"] - 1)
+
+            opcode_change += helpers.num(self.functions[func_name]["offset"])
             opcode_change += OPCODES.CALL
         elif node_name == "While":
             if node.orelse:
