@@ -19,6 +19,11 @@ MAX_VARIABLES = 32
 # offset on the heap at which to store variables
 VARIABLE_OFFSET = 0
 
+# allocate MAX_ARRAY spaces at ARRAY_OFFSET
+# to hold the contents of arrays
+MAX_ARRAY = 128
+ARRAY_OFFSET = 32
+
 class TranslationError(Exception):
     pass
 
@@ -38,7 +43,9 @@ class VariableCounter(ast.NodeVisitor):
     # this class serves to count the number of variables
     # used in childs of the node passed to it
     def __init__(self, tree):
-        self.variables = set()
+        # key: name of variable
+        # val: size (in words)
+        self.variables = {}
         self.node_name = helpers.class_name(tree)
 
         self.visit(tree)
@@ -51,10 +58,13 @@ class VariableCounter(ast.NodeVisitor):
             super().generic_visit(node)
 
     def visit_Assign(self, node):
-        self.variables.update([a.id for a in node.targets])
-    
+        if helpers.class_name(node.value) == "List":
+            self.variables[node.targets[0].id] = len(node.value.elts)
+        elif helpers.class_name(node.targets[0]) != "Subscript":
+            self.variables[node.targets[0].id] = 1
+
     def visit_AugAssign(self, node):
-        self.variables.add(node.target.id)
+        self.variables[node.target.id] = 1
 
 class Translator():
     def __init__(self):
@@ -67,6 +77,14 @@ class Translator():
         # list of args/local variables of a function
         # this will be cleared when done parsing a function
         self.locals = {}
+
+        # list of arrays
+        # key: name of array
+        # val: {
+        #   offset: heap offset
+        #   size
+        # }
+        self.arrays = {}
 
         self.opcodes = ""
 
@@ -92,9 +110,16 @@ class Translator():
         self.logger.info("Identifying globals...")
         counter = VariableCounter(tree)
 
-        for global_var in counter.variables:
-            self.alloc_global(global_var)
-            self.logger.info("Global {} at heap[{}]".format(global_var, self.globals[global_var]))
+        for global_var, size in counter.variables.items():
+            # standard int
+            if size == 1:
+                self.alloc_global(global_var)
+                self.logger.info("Global {} at heap[{}]".format(global_var, self.globals[global_var]))
+            # array
+            else:
+                self.alloc_array(global_var, size)
+                arr = self.arrays[global_var]
+                self.logger.info("Array {} at heap[{}:{}]".format(global_var, arr["offset"], arr["offset"] + arr["size"] - 1))
 
         self.logger.info("Allocated {} global variables".format(len(self.globals)))
 
@@ -138,7 +163,12 @@ class Translator():
                 if node_name != "FunctionDef":
                     self.opcodes += self.translate_node(node)
             except TranslationError as e:
+                self.logger.info(ast.dump(node))
                 self.logger.error("Failed to translate at line {}: {}".format(node.lineno, e))
+                raise e
+            except Exception as e:
+                self.logger.info(ast.dump(node))
+                self.logger.error("Error parsing {}:".format(ast.dump(node)))
                 raise e
 
         return self.opcodes
@@ -168,6 +198,18 @@ class Translator():
             return helpers.num(offset) + OPCODES.HEAP_WRITE
         else:
             raise TranslationError("Cannot write to unknown variable {}".format(name))
+    
+    def alloc_array(self, name, size):
+        # allocate a space for `size` elements and returns the offset
+        allocated = sum([array["size"] for array in self.arrays.values()])
+
+        if allocated + size > MAX_ARRAY:
+            raise TranslationFail("Cannot allocate array space. Increase MAX_ARRAY")
+        
+        self.arrays[name] = {
+            "offset": ARRAY_OFFSET + allocated,
+            "size": size
+        }
     
     def alloc_global(self, name):
         # globals are stored starting at VARIABLE_OFFSET
@@ -204,6 +246,21 @@ class Translator():
             opcode_change += self.read_var(node.id)
         elif node_name == "Num":
             opcode_change += helpers.num(node.n)
+        # a[1]
+        elif node_name == "Subscript":
+            # resolve array index position on the heap
+            opcode_change += helpers.num(self.arrays[node.value.id]["offset"])
+            opcode_change += self.translate_node(node.slice.value)
+            opcode_change += OPCODES.STACK_ADD
+
+            ctx_name = helpers.class_name(node.ctx)
+            if ctx_name == "Store":
+                opcode_change += OPCODES.HEAP_WRITE
+            elif ctx_name == "Load":
+                opcode_change += OPCODES.HEAP_READ
+            else:
+                self.logger.info(ast.dump(node))
+                raise TranslationUnknown("Unknown Subscript.ctx {}".format(ctx_name))
         elif node_name == "BinOp":
             # load left value onto stack first, then right
             opcode_change += self.translate_node(node.left)
@@ -244,10 +301,23 @@ class Translator():
                 self.logger.info(ast.dump(node))
                 raise TranslationUnknown("Cannot assign to more than one variable at a time")
             
-            # evaluate node.value and leave it on the stack
-            opcode_change += self.translate_node(node.value)
-
-            opcode_change += self.write_var(node.targets[0].id)
+            # this handles a = [1, 2, 3]
+            if helpers.class_name(node.value) == "List":
+                arr_name = node.targets[0].id
+                if arr_name not in self.arrays:
+                    raise TranslationFail("Tried to write to unknown array {}".format(arr_name))
+                
+                for i, val in enumerate(node.value.elts):
+                    opcode_change += self.translate_node(val)
+                    opcode_change += helpers.num(self.arrays[arr_name]["offset"] + i)
+                    opcode_change += OPCODES.HEAP_WRITE
+            elif helpers.class_name(node.targets[0]) == "Subscript":
+                opcode_change += self.translate_node(node.value)
+                opcode_change += self.translate_node(node.targets[0])
+            else:
+                # evaluate node.value and leave it on the stack
+                opcode_change += self.translate_node(node.value)
+                opcode_change += self.write_var(node.targets[0].id)
         elif node_name == "AugAssign":
             # a += b
             opcode_change += self.read_var(node.target.id)
@@ -431,10 +501,13 @@ class Translator():
         counter = VariableCounter(node)
 
         # store the heap address for local vars
-        for local_var in counter.variables:
+        for local_var, size in counter.variables.items():
             # check if the variable is actually an argument
             if local_var in args:
                 continue
+            
+            if size > 1:
+                raise TranslationUnknown("Arrays should be declared globally, not inside a function")
             
             self.alloc_local(local_var)
             self.logger.info("Local {} at heap[{}]".format(local_var, self.locals[local_var]))
