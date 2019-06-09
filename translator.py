@@ -214,6 +214,22 @@ class Translator():
             else:
                 self.logger.info(ast.dump(node))
                 raise TranslationUnknown("Missing handler for BinOp.op {}".format(op_name))
+        elif node_name == "BoolOp":
+            # load all the Compares onto the stack
+            opcode_change += self.translate_nodes(node.values)
+
+            op_name = helpers.class_name(node.op)
+            if op_name == "And":
+                # multiply all the conditions together
+                # will result in 0 if any are 0
+                opcode_change += OPCODES.STACK_MULTIPLY * (len(node.values) - 1)
+            elif op_name == "Or":
+                # add all the conditions together
+                # will result in 1 if at least one is 1
+                opcode_change += OPCODES.STACK_ADD * (len(node.values) - 1)
+            else:
+                self.logger.info(ast.dump(node))
+                raise TranslationUnknown("Missing handler for BoolOp.op {}".format(op_name))
         elif node_name == "Assign":
             # sanity check: cannot assign to more than one variable at a time
             # should be simple to do though
@@ -273,7 +289,16 @@ class Translator():
             
             op_name = helpers.class_name(node.ops[0])
 
-            if op_name in ["Eq", "Gt", "Lt"]:
+            if op_name in ["NotEq"]:
+                if op_name == "NotEq":
+                    opcode_change += OPCODES.STACK_COMPARE
+                    # 1 or -1 on stack if true
+                    # changes 0 to 0, non zero to 1
+                    opcode_change += OPCODES.STACK_3 + OPCODES.CONDITIONAL_JUMP # if 0, jump to STACK_1
+                    opcode_change += OPCODES.STACK_1
+                    opcode_change += OPCODES.STACK_1 + OPCODES.GO # then skip past the next instruction
+                    opcode_change += OPCODES.STACK_0
+            elif op_name in ["Eq", "Gt", "Lt"]:
                 # the blocks here are responsible for leaving
                 # a 0 on the stack if true
                 if op_name == "Eq":
