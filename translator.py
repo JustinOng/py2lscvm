@@ -273,14 +273,44 @@ class Translator():
             
             op_name = helpers.class_name(node.ops[0])
 
-            if op_name == "Eq":
-                opcode_change += OPCODES.STACK_COMPARE
+            if op_name in ["Eq", "Gt", "Lt"]:
+                # the blocks here are responsible for leaving
+                # a 0 on the stack if true
+                if op_name == "Eq":
+                    opcode_change += OPCODES.STACK_COMPARE
+                elif op_name == "Gt":
+                    opcode_change += OPCODES.STACK_COMPARE
+                    # should be a 1 on the stack if true
+                    opcode_change += OPCODES.STACK_1 + OPCODES.STACK_SUBTRACT # subtract 1 so becomes 0
+                elif op_name == "Lt":
+                    opcode_change += OPCODES.STACK_COMPARE
+                    # should be a -1 on the stack if true
+                    opcode_change += OPCODES.STACK_1 + OPCODES.STACK_ADD # add 1 so becomes 0
+
                 # this changes 0 to 1, and non zero to 0
-                opcode_change += OPCODES.STACK_3
-                opcode_change += OPCODES.CONDITIONAL_JUMP
-                opcode_change += OPCODES.STACK_0
+                opcode_change += OPCODES.STACK_3 + OPCODES.CONDITIONAL_JUMP # if 0, jump to STACK_1
+                opcode_change += OPCODES.STACK_0              # here because not zero so add a zero
+                opcode_change += OPCODES.STACK_1 + OPCODES.GO # then skip past the next instruction
                 opcode_change += OPCODES.STACK_1
-                opcode_change += OPCODES.GO
+            elif op_name in ["GtE", "LtE"]:
+                if op_name == "GtE":
+                    # need to return 1 if the compare result is 1 or 0
+                    # so test twice
+                    opcode_change += OPCODES.STACK_COMPARE
+                    opcode_change += OPCODES.STACK_1 + OPCODES.STACK_FIND # copy the compare result
+                    opcode_change += OPCODES.STACK_1 + OPCODES.STACK_SUBTRACT # subtract 1 so become 0
+                elif op_name == "LtE":
+                    opcode_change += OPCODES.STACK_COMPARE
+                    opcode_change += OPCODES.STACK_1 + OPCODES.STACK_FIND # copy the compare result
+                    opcode_change += OPCODES.STACK_1 + OPCODES.STACK_ADD # add 1 so become 0
+                
+                # this tests the top two values on the stack and
+                # returns 1 if either of them are 0
+                opcode_change += OPCODES.STACK_5 + OPCODES.CONDITIONAL_JUMP # if gt, jump to STACK_DROP
+                opcode_change += OPCODES.STACK_4 + OPCODES.CONDITIONAL_JUMP # if =, jump to STACK_1
+                opcode_change += OPCODES.STACK_0          # add a zero as the return value
+                opcode_change += OPCODES.STACK_2 + OPCODES.GO # skip next 2 instructions
+                opcode_change += OPCODES.STACK_DROP       # destroy that extra value that we cloned since we never compared =
                 opcode_change += OPCODES.STACK_1
             else:
                 self.logger.info(ast.dump(node))
