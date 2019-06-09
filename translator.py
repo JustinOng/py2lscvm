@@ -322,11 +322,11 @@ class Translator():
                     # need to return 1 if the compare result is 1 or 0
                     # so test twice
                     opcode_change += OPCODES.STACK_COMPARE
-                    opcode_change += OPCODES.STACK_1 + OPCODES.STACK_FIND # copy the compare result
+                    opcode_change += OPCODES.STACK_0 + OPCODES.STACK_FIND # copy the compare result
                     opcode_change += OPCODES.STACK_1 + OPCODES.STACK_SUBTRACT # subtract 1 so become 0
                 elif op_name == "LtE":
                     opcode_change += OPCODES.STACK_COMPARE
-                    opcode_change += OPCODES.STACK_1 + OPCODES.STACK_FIND # copy the compare result
+                    opcode_change += OPCODES.STACK_0 + OPCODES.STACK_FIND # copy the compare result
                     opcode_change += OPCODES.STACK_1 + OPCODES.STACK_ADD # add 1 so become 0
                 
                 # this tests the top two values on the stack and
@@ -366,8 +366,8 @@ class Translator():
 
             # 5 to 7
             body = OPCODES.CONDITIONAL_JUMP + self.translate_nodes(node.body) + OPCODES.GO
-            # 3 to 7
-            opcode_change = OPCODES.STACK_1 + OPCODES.STACK_FIND
+            # 2 to 7
+            opcode_change = OPCODES.STACK_0 + OPCODES.STACK_FIND
             opcode_change += self.translate_node(node.test) + helpers.num(len(body) - 1) + body
             # 1 to 7
             opcode_change = helpers.num(-len(opcode_change)) + opcode_change
