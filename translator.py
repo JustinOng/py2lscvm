@@ -100,6 +100,8 @@ class Translator():
         # to calculate future offsets
         self.funcs_len = FUNCTION_OFFSET_START
 
+        self.is_in_func = False
+
         self.logger = helpers.init_logger("TRANSLATOR")
 
     def translate(self, code):
@@ -422,22 +424,43 @@ class Translator():
                 raise TranslationUnknown("Calling functions this way is not supported")
 
             func_name = node.func.id
-            if func_name not in ["putchar", "putint", "puts"] and func_name not in self.functions:
+            if func_name not in ["putchar", "putint", "puts", "stack_push", "stack_find"] and func_name not in self.functions:
                 raise TranslationError("Tried to call undefined function {}".format(func_name))
 
-            for arg in node.args:
-                opcode_change += self.translate_node(arg)
+            if func_name in ["putchar", "putint", "puts", "stack_push", "stack_find"]:
+                for arg in node.args:
+                    opcode_change += self.translate_node(arg)
 
-            if func_name in ["putchar", "putint", "puts"]:
                 if func_name == "putchar":
                     opcode_change += OPCODES.PRINT_ASCII
                 elif func_name == "putint":
                     opcode_change += OPCODES.PRINT_NUM
                 elif func_name == "puts":
                     pass
+                elif func_name == "stack_push":
+                    # the value would already have been pushed to the stack
+                    # as an arg
+                    pass
+                elif func_name == "stack_find":
+                    opcode_change += OPCODES.STACK_FIND
             else:
+                if self.is_in_func:
+                    # save all locals to the stack
+                    for var in self.locals.keys():
+                        opcode_change += self.read_var(var)
+
+                for arg in node.args:
+                    opcode_change += self.translate_node(arg)
+
                 opcode_change += helpers.num(self.functions[func_name]["offset"])
                 opcode_change += OPCODES.CALL
+
+                if self.is_in_func:
+                    # restore all locals from the stack
+                    # expect the function to leave ONE value on the stack
+                    # so the saved variables are at -1 position
+                    for var in list(self.locals.keys())[::-1]:
+                        opcode_change += OPCODES.STACK_1 + OPCODES.STACK_FIND_REMOVE + self.write_var(var)
         elif node_name == "While":
             if node.orelse:
                 self.logger.info(ast.dump(node))
@@ -475,6 +498,8 @@ class Translator():
     def translate_function(self, node):
         # builds a function from a ast node
         opcodes = ""
+
+        self.is_in_func = True
 
         func_name = node.name
         self.functions[func_name] = {
@@ -525,3 +550,5 @@ class Translator():
 
         self.functions[func_name]["opcodes"] = opcodes
         self.funcs_len += len(opcodes)
+        
+        self.is_in_func = False

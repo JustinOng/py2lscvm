@@ -9,3 +9,9 @@ def puts(string):
 
 def putint(i):
     print(i)
+
+def stack_push(i):
+    pass
+
+def stack_find(i):
+    pass
